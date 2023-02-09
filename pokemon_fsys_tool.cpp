@@ -30,8 +30,8 @@ struct fsys_header_data {
 	uint32_t num_files;
 	uint32_t flags;
 	uint32_t unk;
-	uint32_t ofs_table;
-	uint32_t data_start;
+	uint32_t ofs_table_ofs;
+	uint32_t data_start_ofs;
 	uint32_t fsys_size;
 };
 
@@ -58,7 +58,7 @@ struct FSYSFile {
 	uint32_t id;
 	uint32_t offset;
 	std::vector<uint8_t> data;
-	std::vector<uint8_t> packed_data;
+	std::vector<uint8_t> compressed_data;
 	bool compressed;
 	uint32_t type;
 	std::string name;
@@ -335,11 +335,11 @@ void CompressFSYSFile(FSYSFile &file)
 	size_t src_pos = 0;
 	uint32_t codesize = 16;
 
-	file.packed_data.resize(16);
-	WriteMemoryBufU32(&file.packed_data[0], 'LZSS');
-	WriteMemoryBufU32(&file.packed_data[4], file.data.size());
-	WriteMemoryBufU32(&file.packed_data[8], 0);
-	WriteMemoryBufU32(&file.packed_data[12], 0);
+	file.compressed_data.resize(16);
+	WriteMemoryBufU32(&file.compressed_data[0], 'LZSS');
+	WriteMemoryBufU32(&file.compressed_data[4], file.data.size());
+	WriteMemoryBufU32(&file.compressed_data[8], 0);
+	WriteMemoryBufU32(&file.compressed_data[12], 0);
 	InitTree();  /* initialize trees */
 	code_buf[0] = 0;  /* code_buf[1..16] saves eight units of code, and
 			code_buf[0] works as eight flags, "1" representing that the unit
@@ -375,7 +375,7 @@ void CompressFSYSFile(FSYSFile &file)
 		}
 		if ((mask <<= 1) == 0) {  /* Shift mask left one bit. */
 			for (i = 0; i < code_buf_ptr; i++)  /* Send at most 8 units of */
-				file.packed_data.push_back(code_buf[i]);    /* code together */
+				file.compressed_data.push_back(code_buf[i]);    /* code together */
 			codesize += code_buf_ptr;
 			code_buf[0] = 0;  code_buf_ptr = mask = 1;
 		}
@@ -399,10 +399,10 @@ void CompressFSYSFile(FSYSFile &file)
 		}
 	} while (len > 0);      /* until length of string to be processed is zero */
 	if (code_buf_ptr > 1) {         /* Send remaining code. */
-		for (i = 0; i < code_buf_ptr; i++) file.packed_data.push_back(code_buf[i]);
+		for (i = 0; i < code_buf_ptr; i++) file.compressed_data.push_back(code_buf[i]);
 		codesize += code_buf_ptr;
 	}
-	WriteMemoryBufU32(&file.packed_data[8], codesize);
+	WriteMemoryBufU32(&file.compressed_data[8], codesize);
 }
 
 void ReadJSON(std::string in_file)
@@ -453,6 +453,62 @@ void CompressFiles()
 	}
 }
 
+uint32_t FSYSGetStringDataSize()
+{
+	uint32_t size = 0;
+	for (size_t i = 0; i < fsys_files.size(); i++) {
+		size += fsys_files[i].name.length() + 1;
+	}
+	AlignU32(size, 16);
+	return size;
+}
+
+uint32_t FSYSGetFileListSize()
+{
+	uint32_t entry_size = (fsys_version >= 0x200) ? 0x70 : 0x50;
+	return entry_size * fsys_files.size();
+}
+
+void MakeOfsTable(fsys_offsets_data &offsets, uint32_t base_ofs)
+{
+	offsets.file_list_ofs = base_ofs + sizeof(fsys_offsets_data);
+	AlignU32(offsets.file_list_ofs, 32);
+	offsets.str_ofs = offsets.file_list_ofs + (4 * fsys_files.size());
+	AlignU32(offsets.str_ofs, 16);
+	offsets.data_ofs = offsets.str_ofs + FSYSGetStringDataSize() + FSYSGetFileListSize();
+	AlignU32(offsets.data_ofs, 32);
+}
+
+void CalcDataOffsets(uint32_t base_ofs)
+{
+	uint32_t ofs = base_ofs;
+	for (size_t i = 0; i < fsys_files.size(); i++) {
+		uint32_t data_size = (fsys_files[i].compressed) ? fsys_files[i].compressed_data.size() : fsys_files[i].data.size();
+		AlignU32(data_size, 32);
+		fsys_files[i].offset = ofs;
+		ofs += data_size;
+	}
+}
+
+void WriteFSYS(std::string filename)
+{
+	fsys_header_data header;
+	fsys_offsets_data offsets;
+	header.magic = 'FSYS';
+	header.version = fsys_version;
+	header.archive_id = fsys_archive_id;
+	header.num_files = fsys_files.size();
+	header.flags = 0x80000000;
+	header.unk = 3;
+	header.ofs_table_ofs = sizeof(fsys_header_data);
+	header.data_start_ofs = 0;
+	header.fsys_size = 0;
+	AlignU32(header.ofs_table_ofs, 32);
+	MakeOfsTable(offsets, header.ofs_table_ofs);
+	header.data_start_ofs = offsets.data_ofs;
+	CalcDataOffsets(offsets.data_ofs);
+}
+
 void PackFSYS(std::string in_file, std::string out_file)
 {
 	ReadJSON(in_file);
@@ -469,8 +525,8 @@ void ReadFSYSHeader(FILE *file, fsys_header_data &header)
 	header.num_files = ReadFileU32(file);
 	header.flags = ReadFileU32(file);
 	header.unk = ReadFileU32(file);
-	header.ofs_table = ReadFileU32(file);
-	header.data_start = ReadFileU32(file);
+	header.ofs_table_ofs = ReadFileU32(file);
+	header.data_start_ofs = ReadFileU32(file);
 	header.fsys_size = ReadFileU32(file);
 }
 
@@ -520,6 +576,7 @@ void DecodeLZSS(uint8_t *dst, uint8_t *src)
 		flag >>= 1;
 	}
 }
+
 void ReadFSYSFile(FILE *file, uint32_t file_ofs, FSYSFile &file_info)
 {
 	fsys_file_data data;
@@ -546,10 +603,10 @@ void ReadFSYSFile(FILE *file, uint32_t file_ofs, FSYSFile &file_info)
 	file_info.name = ReadFileString(file);
 	file_info.data.resize(data.size);
 	if (file_info.compressed) {
-		file_info.packed_data.resize(data.packed_size);
+		file_info.compressed_data.resize(data.packed_size);
 		fseek(file, data.offset, SEEK_SET);
-		fread(&file_info.packed_data[0], data.packed_size, 1, file);
-		DecodeLZSS(&file_info.data[0], &file_info.packed_data[0]);
+		fread(&file_info.compressed_data[0], data.packed_size, 1, file);
+		DecodeLZSS(&file_info.data[0], &file_info.compressed_data[0]);
 	} else {
 		fseek(file, data.offset, SEEK_SET);
 		fread(&file_info.data[0], data.size, 1, file);
@@ -584,7 +641,7 @@ void ReadFSYS(std::string in_file)
 		std::cout << "FSYS files that use external files which are not supported." << std::endl;
 		exit(1);
 	}
-	ReadOffsetTable(file, header.ofs_table, offset_table);
+	ReadOffsetTable(file, header.ofs_table_ofs, offset_table);
 	fsys_archive_id = header.archive_id;
 	fsys_version = header.version;
 	ReadFSYSFiles(file, offset_table.file_list_ofs, header.num_files);
