@@ -104,7 +104,10 @@ FileTypeInfo *GetFileTypeID(uint32_t id)
 {
 	for (size_t i = 0; i < known_file_types.size(); i++) {
 		if (known_file_types[i].type_id == id) {
-			return &known_file_types[i];
+			if (fsys_version < 0x200 && known_file_types[i].type_id > FSYS_V1_MAX_TYPE) {
+				return &known_file_types[i];
+			}
+			return nullptr;
 		}
 	}
 	return nullptr;
@@ -114,7 +117,10 @@ FileTypeInfo *GetFileTypeName(std::string name)
 {
 	for (size_t i = 0; i < known_file_types.size(); i++) {
 		if (known_file_types[i].name == name) {
-			return &known_file_types[i];
+			if (fsys_version < 0x200 && known_file_types[i].type_id > FSYS_V1_MAX_TYPE) {
+				return &known_file_types[i];
+			}
+			return nullptr;
 		}
 	}
 	return nullptr;
