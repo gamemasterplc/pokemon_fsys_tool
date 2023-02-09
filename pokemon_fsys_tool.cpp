@@ -4,6 +4,7 @@
 #include <vector>
 #include <stdio.h>
 #include <stdint.h>
+#include <nlohmann/json.hpp>
 
 #define FSYS_V1_MAX_TYPE 19
 #define FSYS_EXTERNAL_FILE_FLAG 0x80000000
@@ -173,7 +174,7 @@ void AlignFile(FILE *file, uint32_t alignment)
 
 void PackFSYS(std::string in_file, std::string out_file)
 {
-
+	
 }
 
 void ReadFSYSHeader(FILE *file, fsys_header_data &header)
