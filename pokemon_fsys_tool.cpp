@@ -145,7 +145,7 @@ void to_json(nlohmann::ordered_json &j, const FSYSFile &file)
 {
 	FileTypeInfo *type_info = GetFileTypeID(file.type);
 	if (!type_info) {
-		std::cout << "Invalid file type " << file.type << std::endl;
+		std::cout << "Invalid file type value " << file.type << std::endl;
 		exit(1);
 	}
 	j = nlohmann::ordered_json{
@@ -158,7 +158,18 @@ void to_json(nlohmann::ordered_json &j, const FSYSFile &file)
 
 void from_json(const nlohmann::ordered_json &j, FSYSFile &file)
 {
-
+	std::string type_name;
+	FileTypeInfo *type_info;
+	j.at("id").get_to(file.id);
+	j.at("name").get_to(file.name);
+	j.at("type").get_to(type_name);
+	file.compressed = j.value("compressed", false);
+	type_info = GetFileTypeName(type_name);
+	if (!type_info) {
+		std::cout << "Invalid file type name " << type_name << std::endl;
+		exit(1);
+	}
+	file.type = type_info->type_id;
 }
 
 bool MakeDirectory(std::string dir)
@@ -244,9 +255,44 @@ void AlignFile(FILE *file, uint32_t alignment)
 	}
 }
 
+void ReadJSON(std::string in_file)
+{
+	size_t slash_pos = in_file.find_last_of("\\/") + 1;
+	size_t dot_pos = in_file.find_last_of(".");
+	std::string json_dir = in_file.substr(0, slash_pos);
+	std::string json_name = in_file.substr(slash_pos, dot_pos - slash_pos);
+	std::ifstream file(in_file);
+	if (!file.is_open()) {
+		std::cout << "Failed to open " << in_file << " for reading." << std::endl;
+		exit(1);
+	}
+	try {
+		nlohmann::ordered_json json = nlohmann::json::parse(file);
+		fsys_version = json.value("version", 513);
+		json.at("id").get_to(fsys_archive_id);
+		json.at("files").get_to(fsys_files);
+	} catch (nlohmann::json::exception &exception) {
+		std::cout << exception.what() << std::endl;
+		exit(1);
+	}
+	for (size_t i = 0; i < fsys_files.size(); i++) {
+		std::string filename = json_dir + json_name + "/" + GetFSYSFileName(fsys_files[i]);
+		FILE *file = fopen(filename.c_str(), "rb");
+		if (!file) {
+			std::cout << "Failed to open " << filename << " for writing." << std::endl;
+			exit(1);
+		}
+		fseek(file, 0, SEEK_END);
+		fsys_files[i].data.resize(ftell(file));
+		fseek(file, 0, SEEK_SET);
+		fread(&fsys_files[i].data[0], fsys_files[i].data.size(), 1, file);
+		fclose(file);
+	}
+}
+
 void PackFSYS(std::string in_file, std::string out_file)
 {
-	
+	ReadJSON(in_file);
 }
 
 void ReadFSYSHeader(FILE *file, fsys_header_data &header)
