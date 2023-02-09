@@ -258,10 +258,6 @@ void AlignFile(FILE *file, uint32_t alignment)
 
 void ReadJSON(std::string in_file)
 {
-	size_t slash_pos = in_file.find_last_of("\\/") + 1;
-	size_t dot_pos = in_file.find_last_of(".");
-	std::string json_dir = in_file.substr(0, slash_pos);
-	std::string json_name = in_file.substr(slash_pos, dot_pos - slash_pos);
 	std::ifstream file(in_file);
 	if (!file.is_open()) {
 		std::cout << "Failed to open " << in_file << " for reading." << std::endl;
@@ -276,6 +272,14 @@ void ReadJSON(std::string in_file)
 		std::cout << exception.what() << std::endl;
 		exit(1);
 	}
+}
+
+void ReadFiles(std::string json_filename)
+{
+	size_t slash_pos = json_filename.find_last_of("\\/") + 1;
+	size_t dot_pos = json_filename.find_last_of(".");
+	std::string json_dir = json_filename.substr(0, slash_pos);
+	std::string json_name = json_filename.substr(slash_pos, dot_pos - slash_pos);
 	for (size_t i = 0; i < fsys_files.size(); i++) {
 		std::string filename = json_dir + json_name + "/" + GetFSYSFileName(fsys_files[i]);
 		FILE *file = fopen(filename.c_str(), "rb");
@@ -294,6 +298,7 @@ void ReadJSON(std::string in_file)
 void PackFSYS(std::string in_file, std::string out_file)
 {
 	ReadJSON(in_file);
+	ReadFiles(in_file);
 }
 
 void ReadFSYSHeader(FILE *file, fsys_header_data &header)
