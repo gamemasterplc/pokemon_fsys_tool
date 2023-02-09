@@ -100,6 +100,55 @@ uint8_t text_buf[N + F - 1];    /* ring buffer of size N, with extra F-1 bytes t
 int match_position, match_length;  /* of longest match.  These are set by the InsertNode() procedure. */
 int lson[N + 1], rson[N + 257], dad[N + 1];  /* left & right children & parents -- These constitute binary search trees. */
 
+FileTypeInfo *GetFileTypeID(uint32_t id)
+{
+	for (size_t i = 0; i < known_file_types.size(); i++) {
+		if (known_file_types[i].type_id == id) {
+			return &known_file_types[i];
+		}
+	}
+	return nullptr;
+}
+
+FileTypeInfo *GetFileTypeName(std::string name)
+{
+	for (size_t i = 0; i < known_file_types.size(); i++) {
+		if (known_file_types[i].name == name) {
+			return &known_file_types[i];
+		}
+	}
+	return nullptr;
+}
+
+std::string GetFSYSFileName(const FSYSFile &file)
+{
+	FileTypeInfo *type_info = GetFileTypeID(file.type);
+	if (!type_info) {
+		return file.name + ".bin";
+	}
+	return file.name + "." + type_info->extension;
+}
+
+void to_json(nlohmann::ordered_json &j, const FSYSFile &file)
+{
+	FileTypeInfo *type_info = GetFileTypeID(file.type);
+	if (!type_info) {
+		std::cout << "Invalid file type " << file.type << std::endl;
+		exit(1);
+	}
+	j = nlohmann::ordered_json{
+		{ "id", file.id },
+		{ "name", file.name },
+		{ "type", type_info->name },
+		{ "compressed", file.compressed }
+	};
+}
+
+void from_json(const nlohmann::ordered_json &j, FSYSFile &file)
+{
+
+}
+
 uint32_t ReadMemoryBufU32(uint8_t *buf)
 {
 	//Convert 4 bytes into native endian 32-bit word
@@ -308,9 +357,19 @@ void ReadFSYS(std::string in_file)
 	fclose(file);
 }
 
-void UnpackFSYS(std::string in_file, std::string out_name)
+void DumpFSYS(std::string base_path)
+{
+	nlohmann::ordered_json json;
+	json["version"] = fsys_version;
+	json["id"] = fsys_archive_id;
+	json["files"] = fsys_files;
+	std::cout << json.dump(4);
+}
+
+void UnpackFSYS(std::string in_file, std::string base_path)
 {
 	ReadFSYS(in_file);
+	DumpFSYS(base_path);
 }
 
 int main(int argc, char **argv)
@@ -318,7 +377,7 @@ int main(int argc, char **argv)
 	if (argc != 4) {
 		std::cout << "Usage: " << argv[0] << " [p/u] input output" << std::endl;
 		std::cout << "p is used in the second argument when packing the input XML into an output FSYS file." << std::endl;
-		std::cout << "u is used in the second argument when dumping an input FSYS file into an output." << std::endl;
+		std::cout << "u is used in the second argument when dumping an input FSYS file into a base path." << std::endl;
 		return 1;
 	}
 	if (argv[1][0] == 'p') {
