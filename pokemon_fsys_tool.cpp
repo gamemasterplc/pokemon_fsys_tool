@@ -1,5 +1,11 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
+#include <fstream>
+#if defined(_WIN32)
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 #include <string>
 #include <vector>
 #include <stdio.h>
@@ -153,6 +159,17 @@ void to_json(nlohmann::ordered_json &j, const FSYSFile &file)
 void from_json(const nlohmann::ordered_json &j, FSYSFile &file)
 {
 
+}
+
+bool MakeDirectory(std::string dir)
+{
+	int ret;
+#if defined(_WIN32)
+	ret = _mkdir(dir.c_str());
+#else 
+	ret = mkdir(dir.c_str(), 0777); // notice that 777 is different than 0777
+#endif]
+	return ret != -1 || errno == EEXIST;
 }
 
 uint32_t ReadMemoryBufU32(uint8_t *buf)
@@ -365,11 +382,32 @@ void ReadFSYS(std::string in_file)
 
 void DumpFSYS(std::string base_path)
 {
+	std::string json_path = base_path + ".json";
+	std::string out_dir_path = base_path + "/";
+	std::ofstream json_file(json_path);
 	nlohmann::ordered_json json;
+	if (!MakeDirectory(out_dir_path)) {
+		std::cout << "Failed to create " << out_dir_path << "." << std::endl;
+		exit(1);
+	}
+	if (!json_file.is_open()) {
+		std::cout << "Failed to open " << json_path << " for writing." << std::endl;
+		exit(1);
+	}
 	json["version"] = fsys_version;
 	json["id"] = fsys_archive_id;
 	json["files"] = fsys_files;
-	std::cout << json.dump(4);
+	json_file << json.dump(4);
+	for (size_t i = 0; i < fsys_files.size(); i++) {
+		std::string filename = out_dir_path+GetFSYSFileName(fsys_files[i]);
+		FILE *file = fopen(filename.c_str(), "wb");
+		if (!file) {
+			std::cout << "Failed to open " << filename << " for writing." << std::endl;
+			exit(1);
+		}
+		fwrite(&fsys_files[i].data[0], fsys_files[i].data.size(), 1, file);
+		fclose(file);
+	}
 }
 
 void UnpackFSYS(std::string in_file, std::string base_path)
