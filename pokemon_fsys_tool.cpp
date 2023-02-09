@@ -369,7 +369,7 @@ void CompressFSYSFile(FSYSFile &file)
 		} else {
 			code_buf[code_buf_ptr++] = (uint8_t)match_position;
 			code_buf[code_buf_ptr++] = (uint8_t)
-				(((match_position >> 2) & 0xC0)
+				(((match_position >> 4) & 0xF0)
 					| (match_length - (THRESHOLD + 1)));  /* Send position and
 								  length pair. Note match_length > THRESHOLD. */
 		}
