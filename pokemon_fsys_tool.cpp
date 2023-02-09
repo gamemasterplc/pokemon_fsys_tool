@@ -420,7 +420,7 @@ int main(int argc, char **argv)
 {
 	if (argc != 4) {
 		std::cout << "Usage: " << argv[0] << " [p/u] input output" << std::endl;
-		std::cout << "p is used in the second argument when packing the input XML into an output FSYS file." << std::endl;
+		std::cout << "p is used in the second argument when packing the input JSON into an output FSYS file." << std::endl;
 		std::cout << "u is used in the second argument when dumping an input FSYS file into a base path." << std::endl;
 		return 1;
 	}
