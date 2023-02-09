@@ -163,6 +163,7 @@ void from_json(const nlohmann::ordered_json &j, FSYSFile &file)
 	j.at("id").get_to(file.id);
 	j.at("name").get_to(file.name);
 	j.at("type").get_to(type_name);
+	file.offset = 0;
 	file.compressed = j.value("compressed", false);
 	type_info = GetFileTypeName(type_name);
 	if (!type_info) {
