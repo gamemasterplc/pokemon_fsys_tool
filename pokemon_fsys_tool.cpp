@@ -13,7 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #define FSYS_V1_MAX_TYPE 19
-#define FSYS_EXTERNAL_FILE_FLAG 0x80000000
+#define FSYS_NO_EXTERNAL_FILE_FLAG 0x80000000
 #define FILE_COMPRESS_FLAG 0x80000000
 
 //LZSS constants
@@ -41,13 +41,13 @@ struct fsys_offsets_data {
 	uint32_t data_ofs;
 };
 
-struct fsys_file_data {
+struct fsys_file_entry {
 	uint32_t id;
 	uint32_t offset;
 	uint32_t size;
 	uint32_t flags;
 	uint32_t unk;
-	uint32_t packed_size;
+	uint32_t compressed_size;
 	uint32_t unk2;
 	uint32_t archive_name_ofs;
 	uint32_t type;
@@ -106,11 +106,16 @@ uint8_t text_buf[N + F - 1];    /* ring buffer of size N, with extra F-1 bytes t
 int match_position, match_length;  /* of longest match.  These are set by the InsertNode() procedure. */
 int lson[N + 1], rson[N + 257], dad[N + 1];  /* left & right children & parents -- These constitute binary search trees. */
 
+bool FSYSIsVersion2()
+{
+	return fsys_version >= 0x200;
+}
+
 FileTypeInfo *GetFileTypeID(uint32_t id)
 {
 	for (size_t i = 0; i < known_file_types.size(); i++) {
 		if (known_file_types[i].type_id == id) {
-			if (fsys_version < 0x200 && known_file_types[i].type_id > FSYS_V1_MAX_TYPE) {
+			if (!FSYSIsVersion2() && known_file_types[i].type_id > FSYS_V1_MAX_TYPE) {
 				return nullptr;
 			}
 			return &known_file_types[i];
@@ -123,7 +128,7 @@ FileTypeInfo *GetFileTypeName(std::string name)
 {
 	for (size_t i = 0; i < known_file_types.size(); i++) {
 		if (known_file_types[i].name == name) {
-			if (fsys_version < 0x200 && known_file_types[i].type_id > FSYS_V1_MAX_TYPE) {
+			if (!FSYSIsVersion2() && known_file_types[i].type_id > FSYS_V1_MAX_TYPE) {
 				return nullptr;
 			}
 			return &known_file_types[i];
@@ -463,10 +468,14 @@ uint32_t FSYSGetStringDataSize()
 	return size;
 }
 
+uint32_t FSYSGetFileListEntrySize()
+{
+	return FSYSIsVersion2() ? 0x70 : 0x50;
+}
+
 uint32_t FSYSGetFileListSize()
 {
-	uint32_t entry_size = (fsys_version >= 0x200) ? 0x70 : 0x50;
-	return entry_size * fsys_files.size();
+	return FSYSGetFileListEntrySize() * fsys_files.size();
 }
 
 void MakeOfsTable(fsys_offsets_data &offsets, uint32_t base_ofs)
@@ -490,15 +499,152 @@ void CalcDataOffsets(uint32_t base_ofs)
 	}
 }
 
+void WriteFSYSHeader(FILE *file, fsys_header_data &header)
+{
+	fseek(file, 0, SEEK_SET);
+	WriteFileU32(file, header.magic);
+	WriteFileU32(file, header.version);
+	WriteFileU32(file, header.archive_id);
+	WriteFileU32(file, header.num_files);
+	WriteFileU32(file, header.flags);
+	WriteFileU32(file, header.unk);
+	WriteFileU32(file, header.ofs_table_ofs);
+	WriteFileU32(file, header.data_start_ofs);
+	WriteFileU32(file, header.fsys_size);
+	AlignFile(file, 32);
+}
+
+void WriteFSYSOffsetData(FILE *file, fsys_offsets_data &offsets, uint32_t offset)
+{
+	fseek(file, offset, SEEK_SET);
+	WriteFileU32(file, offsets.file_list_ofs);
+	WriteFileU32(file, offsets.str_ofs);
+	WriteFileU32(file, offsets.data_ofs);
+	AlignFile(file, 32);
+}
+
+void WriteFSYSFileList(FILE *file, uint32_t file_list_ofs, uint32_t file_entry_ofs)
+{
+	fseek(file, file_list_ofs, SEEK_SET);
+	for (uint32_t i = 0; i < fsys_files.size(); i++) {
+		WriteFileU32(file, file_entry_ofs + (i * FSYSGetFileListEntrySize()));
+	}
+	AlignFile(file, 16);
+}
+
+void WriteFSYSFileNames(FILE *file, uint32_t string_ofs)
+{
+	fseek(file, string_ofs, SEEK_SET);
+	for (uint32_t i = 0; i < fsys_files.size(); i++) {
+		WriteFileString(file, fsys_files[i].name);
+	}
+	AlignFile(file, 16);
+}
+
+void WriteFSYSFileData(FILE *file, uint32_t index)
+{
+	fseek(file, fsys_files[index].offset, SEEK_SET);
+	if (fsys_files[index].compressed) {
+		fwrite(&fsys_files[index].compressed_data[0], fsys_files[index].compressed_data.size(), 1, file);
+	} else {
+		fwrite(&fsys_files[index].data[0], fsys_files[index].data.size(), 1, file);
+	}
+	AlignFile(file, 32);
+}
+
+void WriteFSYSFileEntry(FILE *file, uint32_t offset, fsys_file_entry &entry)
+{
+	fseek(file, offset, SEEK_SET);
+	WriteFileU32(file, entry.id);
+	WriteFileU32(file, entry.offset);
+	WriteFileU32(file, entry.size);
+	WriteFileU32(file, entry.flags);
+	WriteFileU32(file, entry.unk);
+	WriteFileU32(file, entry.compressed_size);
+	WriteFileU32(file, entry.unk2);
+	WriteFileU32(file, entry.archive_name_ofs);
+	WriteFileU32(file, entry.type);
+	WriteFileU32(file, entry.name_ofs);
+	if (FSYSIsVersion2()) {
+		for (uint32_t i = 0; i < 18; i++) {
+			WriteFileU32(file, 0);
+		}
+	} else {
+		for (uint32_t i = 0; i < 3; i++) {
+			WriteFileU32(file, 0);
+		}
+		for (uint32_t i = 0; i < 3; i++) {
+			WriteFileU32(file, 0x11111111);
+		}
+		for (uint32_t i = 0; i < 4; i++) {
+			WriteFileU32(file, 0);
+		}
+	}
+}
+void WriteFSYSFileEntries(FILE *file, uint32_t file_entry_ofs, uint32_t string_ofs)
+{
+	uint32_t entry_size = FSYSGetFileListEntrySize();
+	uint32_t name_ofs = string_ofs;
+	for (uint32_t i = 0; i < fsys_files.size(); i++) {
+		fsys_file_entry file_entry;
+		file_entry.id = fsys_files[i].id;
+		file_entry.offset = fsys_files[i].offset;
+		file_entry.size = fsys_files[i].data.size();
+		file_entry.unk = 0;
+		if (fsys_files[i].compressed) {
+			file_entry.flags = FILE_COMPRESS_FLAG;
+			file_entry.compressed_size = fsys_files[i].compressed_data.size();
+		} else {
+			file_entry.flags = 0;
+			file_entry.compressed_size = file_entry.size;
+		}
+		file_entry.unk2 = 0;
+		file_entry.archive_name_ofs = 0;
+		file_entry.type = fsys_files[i].type;
+		file_entry.name_ofs = name_ofs;
+		WriteFSYSFileEntry(file, file_entry_ofs + (i * entry_size), file_entry);
+		WriteFSYSFileData(file, i);
+		name_ofs += fsys_files[i].name.length() + 1;
+	}
+	fseek(file, file_entry_ofs + (fsys_files.size() * entry_size), SEEK_SET);
+	AlignFile(file, 32);
+}
+
+void WriteFSYSFiles(FILE *file, uint32_t file_list_ofs, uint32_t string_ofs, uint32_t file_entry_ofs)
+{
+	WriteFSYSFileList(file, file_list_ofs, file_entry_ofs);
+	WriteFSYSFileNames(file, string_ofs);
+	WriteFSYSFileEntries(file, file_entry_ofs, string_ofs);
+}
+
+void WriteFSYSFooter(FILE *file)
+{
+	fseek(file, 0, SEEK_END);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 0);
+	WriteFileU32(file, 'FSYS');
+}
+
 void WriteFSYS(std::string filename)
 {
+	FILE *file;
 	fsys_header_data header;
 	fsys_offsets_data offsets;
+	file = fopen(filename.c_str(), "wb");
+	if (!file) {
+		std::cout << "Failed to open " << filename << " for writing." << std::endl;
+		exit(1);
+	}
 	header.magic = 'FSYS';
 	header.version = fsys_version;
 	header.archive_id = fsys_archive_id;
 	header.num_files = fsys_files.size();
-	header.flags = 0x80000000;
+	header.flags = FSYS_NO_EXTERNAL_FILE_FLAG;
 	header.unk = 3;
 	header.ofs_table_ofs = sizeof(fsys_header_data);
 	header.data_start_ofs = 0;
@@ -506,7 +652,14 @@ void WriteFSYS(std::string filename)
 	AlignU32(header.ofs_table_ofs, 32);
 	MakeOfsTable(offsets, header.ofs_table_ofs);
 	header.data_start_ofs = offsets.data_ofs;
-	CalcDataOffsets(offsets.data_ofs);
+	CalcDataOffsets(header.data_start_ofs);
+	WriteFSYSHeader(file, header);
+	WriteFSYSOffsetData(file, offsets, header.ofs_table_ofs);
+	WriteFSYSFiles(file, offsets.file_list_ofs, offsets.str_ofs, offsets.str_ofs + FSYSGetStringDataSize());
+	WriteFSYSFooter(file);
+	header.fsys_size = ftell(file);
+	WriteFSYSHeader(file, header);
+	fclose(file);
 }
 
 void PackFSYS(std::string in_file, std::string out_file)
@@ -514,6 +667,7 @@ void PackFSYS(std::string in_file, std::string out_file)
 	ReadJSON(in_file);
 	ReadFiles(in_file);
 	CompressFiles();
+	WriteFSYS(out_file);
 }
 
 void ReadFSYSHeader(FILE *file, fsys_header_data &header)
@@ -552,7 +706,7 @@ void DecodeLZSS(uint8_t *dst, uint8_t *src)
 	}
 	src += 16;
 	in_size -= 16;
-	memset(text_buf, 0, N+F);
+	memset(text_buf, 0, N+F-1);
 	while (dst_pos < out_size) {
 		if (!(flag & 0x100)) {
 			uint8_t value = *src++;
@@ -579,14 +733,14 @@ void DecodeLZSS(uint8_t *dst, uint8_t *src)
 
 void ReadFSYSFile(FILE *file, uint32_t file_ofs, FSYSFile &file_info)
 {
-	fsys_file_data data;
+	fsys_file_entry data;
 	fseek(file, file_ofs, SEEK_SET);
 	data.id = ReadFileU32(file);
 	data.offset = ReadFileU32(file);
 	data.size = ReadFileU32(file);
 	data.flags = ReadFileU32(file);
 	data.unk = ReadFileU32(file);
-	data.packed_size = ReadFileU32(file);
+	data.compressed_size = ReadFileU32(file);
 	data.unk2 = ReadFileU32(file);
 	data.archive_name_ofs = ReadFileU32(file);
 	data.type = ReadFileU32(file);
@@ -603,9 +757,9 @@ void ReadFSYSFile(FILE *file, uint32_t file_ofs, FSYSFile &file_info)
 	file_info.name = ReadFileString(file);
 	file_info.data.resize(data.size);
 	if (file_info.compressed) {
-		file_info.compressed_data.resize(data.packed_size);
+		file_info.compressed_data.resize(data.compressed_size);
 		fseek(file, data.offset, SEEK_SET);
-		fread(&file_info.compressed_data[0], data.packed_size, 1, file);
+		fread(&file_info.compressed_data[0], data.compressed_size, 1, file);
 		DecodeLZSS(&file_info.data[0], &file_info.compressed_data[0]);
 	} else {
 		fseek(file, data.offset, SEEK_SET);
@@ -637,7 +791,7 @@ void ReadFSYS(std::string in_file)
 		std::cout << "Invalid header magic." << std::endl;
 		exit(1);
 	}
-	if (!(header.flags & FSYS_EXTERNAL_FILE_FLAG)) {
+	if (!(header.flags & FSYS_NO_EXTERNAL_FILE_FLAG)) {
 		std::cout << "FSYS files that use external files which are not supported." << std::endl;
 		exit(1);
 	}
