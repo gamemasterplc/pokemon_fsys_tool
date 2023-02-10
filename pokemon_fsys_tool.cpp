@@ -13,7 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #define FSYS_V1_MAX_TYPE 19
-#define FSYS_NO_EXTERNAL_FILE_FLAG 0x80000000
+#define FSYS_EXTERNAL_FILE_FLAG 0x1
 #define FILE_COMPRESS_FLAG 0x80000000
 
 //LZSS constants
@@ -644,7 +644,7 @@ void WriteFSYS(std::string filename)
 	header.version = fsys_version;
 	header.archive_id = fsys_archive_id;
 	header.num_files = fsys_files.size();
-	header.flags = FSYS_NO_EXTERNAL_FILE_FLAG;
+	header.flags = 0x80000000;
 	header.unk = 3;
 	header.ofs_table_ofs = sizeof(fsys_header_data);
 	header.data_start_ofs = 0;
@@ -791,7 +791,7 @@ void ReadFSYS(std::string in_file)
 		std::cout << "Invalid header magic." << std::endl;
 		exit(1);
 	}
-	if (!(header.flags & FSYS_NO_EXTERNAL_FILE_FLAG)) {
+	if (header.flags & FSYS_EXTERNAL_FILE_FLAG) {
 		std::cout << "FSYS files that use external files which are not supported." << std::endl;
 		exit(1);
 	}
