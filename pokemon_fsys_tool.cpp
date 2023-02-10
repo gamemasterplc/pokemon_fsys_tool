@@ -840,16 +840,27 @@ void UnpackFSYS(std::string in_file, std::string base_path)
 
 int main(int argc, char **argv)
 {
-	if (argc != 4) {
-		std::cout << "Usage: " << argv[0] << " [p/u] input output" << std::endl;
+	if (argc != 3 && argc != 4) {
+		std::cout << "Usage: " << argv[0] << " p/u input output" << std::endl;
 		std::cout << "p is used in the second argument when packing the input JSON into an output FSYS file." << std::endl;
 		std::cout << "u is used in the second argument when dumping an input FSYS file into a base path." << std::endl;
+		std::cout << "The output parameter is optional" << std::endl;
 		return 1;
 	}
+	std::string in_name = argv[2];
+	std::string out_name;
+	if (argc == 4) {
+		out_name = argv[3];
+	} else {
+		out_name = in_name.substr(0, in_name.find_last_of("."));
+	}
 	if (argv[1][0] == 'p') {
-		PackFSYS(argv[2], argv[3]);
+		if (argc != 4) {
+			out_name += ".fsys";
+		}
+		PackFSYS(in_name, out_name);
 	} else if (argv[1][0] == 'u') {
-		UnpackFSYS(argv[2], argv[3]);
+		UnpackFSYS(in_name, out_name);
 	} else {
 		std::cout << "Invalid second argument " << argv[1] << std::endl;
 		return 1;
