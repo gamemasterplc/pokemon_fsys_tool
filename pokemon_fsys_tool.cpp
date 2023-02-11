@@ -13,7 +13,7 @@
 #include <nlohmann/json.hpp>
 
 #define FSYS_V1_MAX_TYPE 19
-#define FSYS_EXTERNAL_FILE_FLAG 0x1
+#define FSYS_ENABLE_OVERRIDE 0x1
 #define FILE_COMPRESS_FLAG 0x80000000
 
 //LZSS constants
@@ -49,7 +49,7 @@ struct fsys_file_entry {
 	uint32_t unk;
 	uint32_t compressed_size;
 	uint32_t unk2;
-	uint32_t archive_name_ofs;
+	uint32_t filename_ofs;
 	uint32_t type;
 	uint32_t name_ofs;
 };
@@ -98,6 +98,7 @@ std::vector<FileTypeInfo> known_file_types = {
 };
 
 uint32_t fsys_version;
+bool fsys_enable_override;
 uint32_t fsys_archive_id;
 std::vector<FSYSFile> fsys_files;
 
@@ -420,6 +421,7 @@ void ReadJSON(std::string in_file)
 	try {
 		nlohmann::ordered_json json = nlohmann::json::parse(file);
 		fsys_version = json.value("version", 513);
+		fsys_enable_override = json.value("override", false);
 		json.at("id").get_to(fsys_archive_id);
 		json.at("files").get_to(fsys_files);
 	} catch (nlohmann::json::exception &exception) {
@@ -458,11 +460,22 @@ void CompressFiles()
 	}
 }
 
-uint32_t FSYSGetStringDataSize()
+uint32_t FSYSGetNameSize()
 {
 	uint32_t size = 0;
 	for (size_t i = 0; i < fsys_files.size(); i++) {
 		size += fsys_files[i].name.length() + 1;
+	}
+	return size;
+}
+
+uint32_t FSYSGetStringDataSize()
+{
+	uint32_t size = FSYSGetNameSize();
+	if (fsys_enable_override) {
+		for (size_t i = 0; i < fsys_files.size(); i++) {
+			size += GetFSYSFileName(fsys_files[i]).length() + 1;
+		}
 	}
 	AlignU32(size, 16);
 	return size;
@@ -532,11 +545,16 @@ void WriteFSYSFileList(FILE *file, uint32_t file_list_ofs, uint32_t file_entry_o
 	AlignFile(file, 16);
 }
 
-void WriteFSYSFileNames(FILE *file, uint32_t string_ofs)
+void WriteFSYSStringTable(FILE *file, uint32_t string_ofs)
 {
 	fseek(file, string_ofs, SEEK_SET);
 	for (uint32_t i = 0; i < fsys_files.size(); i++) {
 		WriteFileString(file, fsys_files[i].name);
+	}
+	if (fsys_enable_override) {
+		for (uint32_t i = 0; i < fsys_files.size(); i++) {
+			WriteFileString(file, GetFSYSFileName(fsys_files[i]));
+		}
 	}
 	AlignFile(file, 16);
 }
@@ -562,7 +580,7 @@ void WriteFSYSFileEntry(FILE *file, uint32_t offset, fsys_file_entry &entry)
 	WriteFileU32(file, entry.unk);
 	WriteFileU32(file, entry.compressed_size);
 	WriteFileU32(file, entry.unk2);
-	WriteFileU32(file, entry.archive_name_ofs);
+	WriteFileU32(file, entry.filename_ofs);
 	WriteFileU32(file, entry.type);
 	WriteFileU32(file, entry.name_ofs);
 	if (FSYSIsVersion2()) {
@@ -585,6 +603,7 @@ void WriteFSYSFileEntries(FILE *file, uint32_t file_entry_ofs, uint32_t string_o
 {
 	uint32_t entry_size = FSYSGetFileListEntrySize();
 	uint32_t name_ofs = string_ofs;
+	uint32_t filename_ofs = name_ofs + FSYSGetNameSize();
 	for (uint32_t i = 0; i < fsys_files.size(); i++) {
 		fsys_file_entry file_entry;
 		file_entry.id = fsys_files[i].id;
@@ -599,7 +618,11 @@ void WriteFSYSFileEntries(FILE *file, uint32_t file_entry_ofs, uint32_t string_o
 			file_entry.compressed_size = file_entry.size;
 		}
 		file_entry.unk2 = 0;
-		file_entry.archive_name_ofs = 0;
+		file_entry.filename_ofs = 0;
+		if (fsys_enable_override) {
+			file_entry.filename_ofs = filename_ofs;
+			filename_ofs += GetFSYSFileName(fsys_files[i]).length() + 1;
+		}
 		file_entry.type = fsys_files[i].type;
 		file_entry.name_ofs = name_ofs;
 		WriteFSYSFileEntry(file, file_entry_ofs + (i * entry_size), file_entry);
@@ -613,7 +636,7 @@ void WriteFSYSFileEntries(FILE *file, uint32_t file_entry_ofs, uint32_t string_o
 void WriteFSYSFiles(FILE *file, uint32_t file_list_ofs, uint32_t string_ofs, uint32_t file_entry_ofs)
 {
 	WriteFSYSFileList(file, file_list_ofs, file_entry_ofs);
-	WriteFSYSFileNames(file, string_ofs);
+	WriteFSYSStringTable(file, string_ofs);
 	WriteFSYSFileEntries(file, file_entry_ofs, string_ofs);
 }
 
@@ -645,6 +668,9 @@ void WriteFSYS(std::string filename)
 	header.archive_id = fsys_archive_id;
 	header.num_files = fsys_files.size();
 	header.flags = 0x80000000;
+	if (fsys_enable_override) {
+		header.flags |= FSYS_ENABLE_OVERRIDE;
+	}
 	header.unk = 3;
 	header.ofs_table_ofs = sizeof(fsys_header_data);
 	header.data_start_ofs = 0;
@@ -742,7 +768,7 @@ void ReadFSYSFile(FILE *file, uint32_t file_ofs, FSYSFile &file_info)
 	data.unk = ReadFileU32(file);
 	data.compressed_size = ReadFileU32(file);
 	data.unk2 = ReadFileU32(file);
-	data.archive_name_ofs = ReadFileU32(file);
+	data.filename_ofs = ReadFileU32(file);
 	data.type = ReadFileU32(file);
 	data.name_ofs = ReadFileU32(file);
 	file_info.id = data.id;
@@ -791,9 +817,10 @@ void ReadFSYS(std::string in_file)
 		std::cout << "Invalid header magic." << std::endl;
 		exit(1);
 	}
-	if (header.flags & FSYS_EXTERNAL_FILE_FLAG) {
-		std::cout << "FSYS files that use external files which are not supported." << std::endl;
-		exit(1);
+	if (header.flags & FSYS_ENABLE_OVERRIDE) {
+		fsys_enable_override = true;
+	} else {
+		fsys_enable_override = false;
 	}
 	ReadOffsetTable(file, header.ofs_table_ofs, offset_table);
 	fsys_archive_id = header.archive_id;
@@ -817,6 +844,7 @@ void DumpFSYS(std::string base_path)
 		exit(1);
 	}
 	json["version"] = fsys_version;
+	json["override"] = fsys_enable_override;
 	json["id"] = fsys_archive_id;
 	json["files"] = fsys_files;
 	json_file << json.dump(4);
